@@ -1,0 +1,11 @@
+# Agent 安全靶场 Python 依赖（Python 3.11+）
+# 安装: python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
+# 另需独立组件: JDK 17（运行 auth-server 下 Keycloak 26.7.4，无需 pip 安装）
+
+fastapi==0.141.1          # 四服务 Web 框架
+uvicorn==0.53.0           # ASGI 服务
+httpx==0.28.1             # 服务间 HTTP 客户端（trust_env=False 规避本机代理劫持）
+PyJWT==2.14.0             # JWT 解析与 JWKS 验签（RS256）
+cryptography==50.0.1      # PyJWT RSA 算法后端
+pydantic==2.13.5          # 请求模型校验
+python-dotenv==1.2.3      # .env 私密配置加载

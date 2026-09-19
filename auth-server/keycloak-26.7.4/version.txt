@@ -1,0 +1,1 @@
+Keycloak - Version 26.7.4

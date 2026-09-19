@@ -1,0 +1,25 @@
+# 密钥与私密配置，绝不入库、不入投递包
+.env
+*.env.local
+secrets/
+
+# SQLite 数据（WAL 模式下 -wal/-shm 才是真实数据，含测试凭据原文）
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/experiments/
+data/logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Keycloak：安装包不入库；运行时数据克隆后由 setup_keycloak.py 重建
+auth-server/*.zip
+auth-server/keycloak-*/data/
+auth-server/keycloak-*/logs/
+auth-server/keycloak-*/tmp/
+
+logs/

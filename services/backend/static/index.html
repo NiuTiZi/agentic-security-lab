@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 身份与信任安全靶场</title>
+<style>
+  :root { --bg:#0f141a; --card:#171e27; --line:#263140; --txt:#dbe4ee; --dim:#7d8fa3;
+          --ok:#3fb96f; --bad:#e0564f; --skip:#5a6a7d; --acc:#4aa3ff; --warn:#e0a84f; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt); font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif; padding:24px; }
+  .wrap { max-width:1100px; margin:0 auto; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  .sub { color:var(--dim); font-size:12px; margin-bottom:20px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:15px; margin-bottom:12px; color:var(--acc); }
+  .card h2 small { color:var(--dim); font-weight:normal; margin-left:8px; }
+  label { display:block; font-size:12px; color:var(--dim); margin:8px 0 4px; }
+  input, select, textarea { width:100%; background:#0d1117; color:var(--txt); border:1px solid var(--line);
+    border-radius:6px; padding:8px 10px; font-size:13px; }
+  button { background:var(--acc); color:#fff; border:none; border-radius:6px; padding:8px 16px;
+    font-size:13px; cursor:pointer; margin-top:10px; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--dim); }
+  button.danger { background:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--dim); font-weight:normal; padding:6px 8px; border-bottom:1px solid var(--line); }
+  td { padding:6px 8px; border-bottom:1px solid var(--line); }
+  .chip { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; }
+  .chip.ok { background:rgba(63,185,111,.15); color:var(--ok); }
+  .chip.bad { background:rgba(224,86,79,.15); color:var(--bad); }
+  .chip.dim { background:rgba(90,106,125,.15); color:var(--skip); }
+  .chip.warn { background:rgba(224,168,79,.15); color:var(--warn); }
+  .msg { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:10px; background:#0d1117; }
+  .msg .who { font-size:11px; color:var(--dim); margin-bottom:4px; }
+  .msg .txt { white-space:pre-wrap; }
+  .chain { margin-top:8px; font-size:11.5px; }
+  .chain .step { display:flex; gap:8px; padding:2px 0; align-items:baseline; }
+  .chain .lname { width:110px; flex-shrink:0; }
+  .layer-pass { color:var(--ok); } .layer-fail { color:var(--bad); font-weight:bold; }
+  .layer-skip { color:var(--skip); }
+  .chain .ldet { color:var(--dim); }
+  .hidden { display:none; }
+  #chatbox { height:340px; overflow-y:auto; padding-right:4px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { flex:1; }
+  .err { color:var(--bad); font-size:12px; margin-top:6px; }
+  .ok-note { color:var(--ok); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Agent 身份与信任安全靶场</h1>
+  <div class="sub">可信后台 :8000 · 客服Agent :8100 · 退款Agent :8200 · 工具服务 :8300 · Keycloak :8080　|　演示账号：alice / bob / carol（密码均为 账号名+123）</div>
+
+  <div class="card" id="loginCard">
+    <h2>用户登录 <small>本地教学账号（用户 OIDC 为后续扩展项）</small></h2>
+    <div class="row">
+      <input id="u" placeholder="用户名，如 alice">
+      <input id="p" type="password" placeholder="密码，如 alice123" style="flex:1">
+      <button onclick="login()" style="flex:0 0 auto;margin-top:0">登录</button>
+    </div>
+    <div class="err" id="loginErr"></div>
+  </div>
+
+  <div id="main" class="hidden">
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h2>发起任务 <small>用户确认 → 可信后台签发任务授权记录</small></h2>
+          <label>任务类型</label>
+          <select id="op" onchange="opChanged()">
+            <option value="order.read">查询订单（order.read）</option>
+            <option value="docs.read">检索部门资料（docs.read）</option>
+            <option value="refund.request">申请退款（refund.request）</option>
+            <option value="message.send">发送消息（message.send）</option>
+          </select>
+          <div id="orderPick">
+            <label>订单范围（本人订单，多选）</label>
+            <div id="orders"></div>
+            <label><input type="checkbox" id="allOrders" style="width:auto" onchange="toggleAll()"> 授权查询我的全部订单</label>
+          </div>
+          <div id="refundPick" class="hidden">
+            <div style="margin-top:10px;padding:10px;border:1px solid var(--warn);border-radius:8px;background:rgba(224,168,79,.06)">
+              <div style="color:var(--warn);font-size:12px;margin-bottom:8px">敏感参数确认：以下退款参数将固定为任务授权内容，后续委托与执行只能在此范围内进行，提高金额需要重新确认。</div>
+              <label>退款订单（本人订单）</label>
+              <select id="rfOrder"></select>
+              <label>退款金额（元）</label>
+              <input id="rfAmount" type="number" min="0.01" step="0.01" placeholder="如 100">
+              <label>退款用途</label>
+              <input id="rfReason" placeholder="如：商品质量问题">
+            </div>
+          </div>
+          <div id="msgPick" class="hidden">
+            <div style="margin-top:10px;padding:10px;border:1px solid var(--warn);border-radius:8px;background:rgba(224,168,79,.06)">
+              <div style="color:var(--warn);font-size:12px;margin-bottom:8px">敏感参数确认：收件人将固定为任务授权内容，Agent 只能向以下确认过的收件人发送，新增收件人需要重新创建任务。演示环境仅允许 *@local-test 本地测试接收端。</div>
+              <label>收件人（本地测试接收端）</label>
+              <input id="msgRecipient" placeholder="如 archive@local-test">
+              <label>消息主题（可选）</label>
+              <input id="msgSubject" placeholder="如：售后工单归档">
+            </div>
+          </div>
+          <button onclick="createTask()">创建任务并签发执行凭据</button>
+          <div class="err" id="taskErr"></div>
+          <div class="ok-note" id="taskOk"></div>
+        </div>
+
+        <div class="card">
+          <h2>我的任务 <small>任务编号仅为查询标识，授权凭据在服务端</small></h2>
+          <table><thead><tr><th>编号</th><th>操作</th><th>范围</th><th>状态</th><th></th></tr></thead>
+          <tbody id="taskList"></tbody></table>
+        </div>
+
+        <div class="card hidden" id="approvalCard">
+          <h2>退款审批 <small>审批绑定子任务、工具与关键参数（订单/金额）</small></h2>
+          <div id="pendingList">暂无待审批子任务</div>
+        </div>
+
+        <div class="card hidden" id="adminCard">
+          <h2>系统管理 <small>Agent 两阶段停用：应用侧准入 → 授权服务客户端</small></h2>
+          <table><thead><tr><th>Agent</th><th>OAuth 客户端</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="agentList"></tbody></table>
+          <div class="ok-note" id="adminNote"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h2>Agent 对话 <small>六层链路：客户端认证 → 令牌签发 → JWT验证 → scope → 任务与用户授权 → 业务执行</small></h2>
+          <div style="font-size:12px;margin-bottom:8px;color:var(--dim)">对话模式：<span id="modeBadge"></span>　<span id="expBadge"></span></div>
+          <label>选择任务</label>
+          <select id="taskSel" onchange="clearChat()"></select>
+          <div id="chatbox" style="margin-top:10px"></div>
+          <div class="row" style="margin-top:10px">
+            <input id="msgInput" placeholder="如：查询订单 ORD-1001 / 查我的所有订单 / 检索资料" onkeydown="if(event.key==='Enter')sendMsg()">
+            <button onclick="sendMsg()" style="flex:0 0 auto;margin-top:0">发送</button>
+          </div>
+          <div class="err" id="chatErr"></div>
+        </div>
+
+        <div class="card">
+          <h2>本地测试接收端 <small>message.send 实际投递内容（RISK-04 观察点，无真实外发）</small></h2>
+          <button class="ghost" onclick="loadInbox()" style="margin-top:0">刷新</button>
+          <div id="inboxList" style="margin-top:10px">暂无消息</div>
+        </div>
+
+        <div class="card">
+          <h2>实验配置 <small>受控实验环境专用：关闭防护仅用于风险复现，演示后请立即恢复</small></h2>
+          <div style="color:var(--warn);font-size:12px;margin-bottom:8px">当前状态：<span id="expStateBadge"></span></div>
+          <div id="expSwitches" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:13px"></div>
+          <div class="row">
+            <button class="ghost" onclick="expReset()" style="margin-top:10px">一键恢复全部防护（实验重置）</button>
+          </div>
+          <div class="err" id="expErr"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const BACKEND = location.origin;
+const AGENT = "http://127.0.0.1:8100";
+let session = null, user = null, tasks = [], orders = [];
+
+function login() {
+  fetch(BACKEND + "/api/auth/login", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({username:u.value, password:p.value})})
+  .then(r => r.json().then(j => ({ok:r.ok, j})))
+  .then(({ok, j}) => {
+    if (!ok) { loginErr.textContent = typeof j.detail === "string" ? j.detail : "登录失败"; return; }
+    session = j.session_token; user = j.user;
+    sessionStorage.setItem("range_session", session);
+    afterLogin();
+  });
+}
+function logout() {
+  fetch(BACKEND + "/api/auth/logout", {headers:{Authorization:"Bearer " + session}});
+  sessionStorage.removeItem("range_session");
+  location.reload();
+}
+function api(path, opts={}) {
+  opts.headers = Object.assign({Authorization:"Bearer " + session, "Content-Type":"application/json"}, opts.headers||{});
+  return fetch(BACKEND + path, opts).then(async r => {
+    const j = await r.json().catch(()=>({}));
+    return {ok:r.ok, status:r.status, j};
+  });
+}
+function afterLogin() {
+  loginCard.classList.add("hidden"); main.classList.remove("hidden");
+  document.querySelector(".sub").innerHTML += `　|　当前用户：<b>${user.display_name}</b> <a href="#" onclick="logout()" style="color:var(--dim)">退出</a>`;
+  if (user.role === "approver") { adminCard.classList.remove("hidden"); loadAgents(); approvalCard.classList.remove("hidden"); }
+  loadModeBadge(); loadInbox();
+  refresh();
+}
+function loadModeBadge() {
+  api("/api/experiment/config").then(({ok, j}) => {
+    if (!ok) return;
+    const c = j.config || {};
+    const mode = c.agent_mode || "fixed";
+    modeBadge.innerHTML = mode === "llm"
+      ? '<span class="chip ok">真实模型（DeepSeek 工具调用循环）</span>'
+      : '<span class="chip dim">固定解析（回放模式）</span>';
+    const risks = Object.entries(c).filter(([k,v]) => typeof v === "boolean" && !v).map(([k]) => k);
+    expBadge.innerHTML = risks.length
+      ? `<span class="chip bad">实验风险配置：${risks.join("、")} 已关闭</span>`
+      : '<span class="chip ok">防护全部启用</span>';
+    expStateBadge.innerHTML = risks.length
+      ? `<span class="chip bad">风险复现中（${risks.length} 项防护已关闭）</span>`
+      : '<span class="chip ok">防护全部启用</span>';
+    renderExpSwitches(c);
+  });
+}
+const EXP_SWITCHES = [
+  ["llm_outbound_redact", "模型出站脱敏（RISK-01）"],
+  ["untrusted_marking", "不可信内容标记（RISK-04）"],
+  ["runtime_task_check", "运行层任务范围检查（RISK-04）"],
+  ["tools_ownership_check", "对象归属检查（RISK-03）"],
+  ["outbound_dest_limit", "出站目的地白名单（RISK-04）"],
+  ["outbound_redact", "消息发送参数脱敏（RISK-01）"],
+  ["injection_detect", "注入辅助检测（RISK-04）"],
+  ["tools_task_verify", "工具端任务授权核验（降级实验用）"],
+];
+function renderExpSwitches(c) {
+  expSwitches.innerHTML = EXP_SWITCHES.map(([k, label]) => {
+    const on = c[k] !== false;
+    return `<label style="margin:2px 0;display:flex;align-items:center;gap:6px">
+      <input type="checkbox" ${on ? "checked" : ""} onchange="expToggle('${k}', this.checked)"> ${label}
+      <span class="chip ${on ? "ok" : "bad"}" style="margin-left:auto">${on ? "开" : "关"}</span></label>`;
+  }).join("");
+}
+function expToggle(key, value) {
+  expErr.textContent = "";
+  api("/api/experiment/config", {method:"POST", body:JSON.stringify({[key]: value})}).then(({ok, j}) => {
+    if (!ok) { expErr.textContent = j.detail || "切换失败"; loadModeBadge(); return; }
+    const c = j.config || {};
+    renderExpSwitches(c);
+    loadModeBadge();
+  });
+}
+function expReset() {
+  expErr.textContent = "";
+  api("/api/experiment/reset", {method:"POST"}).then(({ok, j}) => {
+    if (!ok) { expErr.textContent = j.detail || "重置失败"; return; }
+    renderExpSwitches(j.config || {});
+    loadModeBadge();
+  });
+}
+function refresh() {
+  api("/api/me").then(({ok, j}) => {
+    if (!ok) return;
+    orders = j.orders;
+    ordersDiv.innerHTML = orders.map(o =>
+      `<label style="margin:2px 0"><input type="checkbox" class="ord" value="${o.order_id}" style="width:auto"> ${o.order_id} ${o.title}（¥${(o.amount_cents/100).toFixed(2)}）</label>`).join("");
+    rfOrder.innerHTML = orders.map(o =>
+      `<option value="${o.order_id}">${o.order_id} ${o.title}（订单金额 ¥${(o.amount_cents/100).toFixed(2)}）</option>`).join("");
+    return api("/api/tasks");
+  }).then(({ok, j}) => {
+    if (!ok) return;
+    tasks = j.tasks;
+    taskList.innerHTML = tasks.map(t => {
+      let sc;
+      if (t.resource.type === "user_all") sc = "全部本人订单/资料";
+      else if (t.resource.type === "refund") sc = `退款 ${t.resource.order_id} ≤¥${(t.resource.amount_cents ?? t.resource.amount_limit_cents)/100 .toFixed(2)}`;
+      else if (t.resource.type === "message") sc = "收件人 " + (t.resource.recipients||[]).join("、");
+      else sc = (t.resource.order_ids||[]).join(", ");
+      const st = t.status === "active" ? '<span class="chip ok">active</span>'
+               : t.status === "revoked" ? '<span class="chip bad">revoked</span>'
+               : '<span class="chip warn">expired</span>';
+      const ap = t.operation === "refund.execute"
+        ? (t.approval_status === "approved" ? ' <span class="chip ok">已审批</span>'
+         : t.approval_status === "rejected" ? ' <span class="chip bad">审批拒绝</span>'
+         : ' <span class="chip warn">待审批</span>') : "";
+      const tag = t.parent_task_id ? "子任务·" : "";
+      return `<tr><td>${t.task_id}</td><td>${tag}${t.operation}</td><td>${sc}</td><td>${st}${ap}</td>
+        <td>${t.status==="active" ? `<button class="ghost" onclick="revoke('${t.task_id}')">撤销</button>`:""}</td></tr>`;
+    }).join("");
+    taskSel.innerHTML = tasks.filter(t=>t.status==="active")
+      .map(t => `<option value="${t.task_id}">${t.task_id} · ${t.operation}${t.parent_task_id ? "（子任务→退款Agent）" : ""}</option>`).join("");
+    if (user.role === "approver") loadPending();
+  });
+}
+function toggleAll() {
+  document.querySelectorAll(".ord").forEach(c => c.disabled = allOrders.checked);
+}
+function opChanged() {
+  const op = opSel();
+  orderPick.classList.toggle("hidden", op === "refund.request" || op === "message.send");
+  refundPick.classList.toggle("hidden", op !== "refund.request");
+  msgPick.classList.toggle("hidden", op !== "message.send");
+}
+function createTask() {
+  taskErr.textContent = taskOk.textContent = "";
+  const op = opSel();
+  let resource;
+  if (op === "order.read") {
+    if (allOrders.checked) resource = {type:"user_all"};
+    else {
+      const ids = [...document.querySelectorAll(".ord:checked")].map(c => c.value);
+      if (!ids.length) { taskErr.textContent = "请选择订单或勾选全部"; return; }
+      resource = {type:"order_ids", order_ids:ids};
+    }
+  } else if (op === "refund.request") {
+    const amountYuan = parseFloat(rfAmount.value);
+    if (!rfOrder.value || !amountYuan || amountYuan <= 0) { taskErr.textContent = "请填写退款订单与金额"; return; }
+    if (!rfReason.value.trim()) { taskErr.textContent = "请填写退款用途"; return; }
+    resource = {type:"refund", order_id:rfOrder.value, amount_cents:Math.round(amountYuan*100), reason:rfReason.value.trim()};
+  } else if (op === "message.send") {
+    const rcpt = msgRecipient.value.trim();
+    if (!rcpt) { taskErr.textContent = "请填写收件人"; return; }
+    resource = {type:"message", recipients:[rcpt]};
+  } else resource = {type:"user_all"};
+  api("/api/tasks", {method:"POST", body:JSON.stringify({operation:op, resource})})
+  .then(({ok, j}) => {
+    if (!ok) { taskErr.textContent = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail||j); return; }
+    taskOk.textContent = op === "refund.request"
+      ? `退款任务 ${j.task_id} 已创建（订单 ${resource.order_id}，金额 ¥${(resource.amount_cents/100).toFixed(2)}，有效期至 ${j.expires_at.slice(11,19)}）。在右侧对话中对客服 Agent 说“为 ${resource.order_id} 申请退款 ${(resource.amount_cents/100).toFixed(2)} 元”即可发起委托`
+      : `任务 ${j.task_id} 已创建（执行凭据已推送 Agent 运行层，有效期至 ${j.expires_at.slice(11,19)}），可在右侧对话使用`;
+    refresh();
+  });
+}
+function opSel() { return document.getElementById("op").value; }
+function revoke(tid) {
+  api(`/api/tasks/${tid}/revoke`, {method:"POST"}).then(refresh);
+}
+function loadPending() {
+  api("/api/approvals/pending").then(({ok, j}) => {
+    if (!ok) return;
+    if (!j.pending.length) { pendingList.innerHTML = "暂无待审批子任务"; return; }
+    pendingList.innerHTML = j.pending.map(p => {
+      const r = p.resource;
+      return `<div class="msg"><div class="who">${p.task_id}（父任务 ${p.parent_task_id}）· 用户 ${p.user}</div>
+        <div class="txt">退款执行：订单 ${r.order_id}，金额上限 ¥${(r.amount_limit_cents/100).toFixed(2)}，用途：${r.reason||"-"}</div>
+        <div class="row" style="margin-top:6px">
+          <button onclick="approve('${p.task_id}','approve')" style="margin-top:0">批准</button>
+          <button class="danger" onclick="approve('${p.task_id}','reject')" style="margin-top:0">拒绝</button>
+        </div></div>`;
+    }).join("");
+  });
+}
+function approve(tid, dec) {
+  api(`/api/tasks/${tid}/approval`, {method:"POST", body:JSON.stringify({decision:dec})})
+  .then(({ok, j}) => { loadPending(); refresh(); });
+}
+function loadAgents() {
+  api("/api/admin/agents").then(({ok, j}) => {
+    if (!ok) return;
+    agentList.innerHTML = j.agents.map(a => `<tr><td>${a.display_name}</td><td>${a.oauth_client_id}</td>
+      <td>${a.active ? '<span class="chip ok">active</span>' : '<span class="chip bad">disabled</span>'}</td>
+      <td><button class="${a.active?"danger":"ghost"}" onclick="agentAction('${a.agent_id}','${a.active?"disable":"enable"}')">${a.active?"停用":"启用"}</button></td></tr>`).join("");
+  });
+}
+function agentAction(aid, act) {
+  api(`/api/admin/agents/${aid}/action`, {method:"POST", body:JSON.stringify({action:act})})
+  .then(({ok, j}) => {
+    adminNote.textContent = ok ? `结果: ${j.status}（应用侧: ${j.phases.app_side}, 授权服务: ${j.phases.oauth_server}）`
+                               : "操作失败";
+    loadAgents();
+  });
+}
+function clearChat() { chatbox.innerHTML = ""; chatErr.textContent=""; }
+function chainHtml(execution) {
+  if (!execution) return "";
+  return '<div class="chain">' + execution.chain.map(s => {
+    const cls = s.status === "pass" ? "layer-pass" : s.status === "fail" ? "layer-fail" : "layer-skip";
+    const mark = s.status === "pass" ? "✓" : s.status === "fail" ? "✗" : "–";
+    return `<div class="step"><span class="${cls}">${mark} ${s.layer}</span><span class="ldet">${s.detail||""}</span></div>`;
+  }).join("") + '</div>';
+}
+function addMsg(who, text, execution, executions, model) {
+  const div = document.createElement("div"); div.className = "msg";
+  let body = `<div class="who">${who}`;
+  if (model && model.mode === "llm") {
+    body += `　<span class="chip dim">${model.model||""} · ${model.rounds||0} 轮</span>`;
+  }
+  body += `</div><div class="txt">${text.replace(/</g,"&lt;")}</div>`;
+  if (executions && executions.length) {
+    for (const e of executions) {
+      body += `<div style="font-size:11px;color:var(--dim);margin-top:6px">工具调用：${e.operation} → ${e.ok ? '<span class="layer-pass">通过</span>' : `<span class="layer-fail">拒绝</span>`}</div>`;
+      body += chainHtml(e);
+    }
+  } else if (execution) {
+    body += chainHtml(execution);
+  }
+  div.innerHTML = body;
+  chatbox.appendChild(div); chatbox.scrollTop = chatbox.scrollHeight;
+}
+function sendMsg() {
+  const tid = taskSel.value, text = msgInput.value.trim();
+  if (!tid || !text) { chatErr.textContent = "请选择任务并输入消息"; return; }
+  const task = tasks.find(t => t.task_id === tid);
+  const agentBase = task && task.agent_id === "refund-agent" ? "http://127.0.0.1:8200" : AGENT;
+  const agentName = agentBase === AGENT ? "客服Agent" : "退款Agent";
+  chatErr.textContent = ""; msgInput.value = "";
+  addMsg("我", text, null);
+  fetch(agentBase + "/api/agent/message", {method:"POST",
+    headers:{"Content-Type":"application/json", "X-Session-Token":session},
+    body: JSON.stringify({task_id:tid, message:text})})
+  .then(async r => {
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok) { chatErr.textContent = (typeof j.detail==="string"?j.detail:"对话失败"); return; }
+    addMsg(agentName, j.reply, j.execution, j.executions, j.model);
+    loadInbox(); refresh();
+  })
+  .catch(() => chatErr.textContent = `Agent 服务不可达（${agentBase}）`);
+}
+function loadInbox() {
+  api("/api/inbox").then(({ok, j}) => {
+    if (!ok) return;
+    const msgs = j.messages || [];
+    if (!msgs.length) { inboxList.innerHTML = "暂无消息"; return; }
+    inboxList.innerHTML = msgs.map(m =>
+      `<div class="msg"><div class="who">#${m.id} → ${m.recipient} · ${m.received_at.slice(11,19)}</div>
+       <div class="txt">${(m.subject ? "【"+m.subject+"】\n" : "") + m.body}</div></div>`).join("");
+  });
+}
+window.u = document.getElementById("u"); window.p = document.getElementById("p");
+window.loginErr = document.getElementById("loginErr");
+const ordersDiv = document.getElementById("orders"), allOrders = document.getElementById("allOrders");
+const taskList = document.getElementById("taskList"), taskSel = document.getElementById("taskSel");
+window.taskErr = document.getElementById("taskErr"); window.taskOk = document.getElementById("taskOk");
+window.adminCard = document.getElementById("adminCard"); window.agentList = document.getElementById("agentList");
+window.adminNote = document.getElementById("adminNote");
+window.approvalCard = document.getElementById("approvalCard"); window.pendingList = document.getElementById("pendingList");
+window.orderPick = document.getElementById("orderPick"); window.refundPick = document.getElementById("refundPick");
+window.msgPick = document.getElementById("msgPick"); window.msgRecipient = document.getElementById("msgRecipient");
+window.modeBadge = document.getElementById("modeBadge"); window.expBadge = document.getElementById("expBadge");
+window.inboxList = document.getElementById("inboxList");
+window.rfOrder = document.getElementById("rfOrder"); window.rfAmount = document.getElementById("rfAmount");
+window.rfReason = document.getElementById("rfReason"); window.op = document.getElementById("op");
+window.chatbox = document.getElementById("chatbox"); window.msgInput = document.getElementById("msgInput");
+window.chatErr = document.getElementById("chatErr");
+window.loginCard = document.getElementById("loginCard"); window.main = document.getElementById("main");
+const saved = sessionStorage.getItem("range_session");
+if (saved) {
+  session = saved;
+  fetch(BACKEND + "/api/me", {headers:{Authorization:"Bearer " + session}})
+    .then(r => r.ok ? r.json() : null)
+    .then(j => { if (j) { user = j.user; afterLogin(); } else sessionStorage.removeItem("range_session"); });
+}
+</script>
+</body>
+</html>
